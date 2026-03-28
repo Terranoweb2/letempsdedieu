@@ -270,7 +270,7 @@ export function useVoiceChat() {
   // Direct server TTS (for goodbye message)
   const speakWithServerDirect = useCallback(async (text: string): Promise<void> => {
     try {
-      const voicePref = localStorage.getItem('ltdd-voice') || 'vivienne';
+      const voicePref = localStorage.getItem('ltdd-voice') || 'amina';
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -363,7 +363,7 @@ export function useVoiceChat() {
       };
 
       try {
-        const voicePref = localStorage.getItem('ltdd-voice') || 'vivienne';
+        const voicePref = localStorage.getItem('ltdd-voice') || 'amina';
         const resp = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -410,7 +410,7 @@ export function useVoiceChat() {
     const sentence = ttsQueueRef.current.shift()!;
 
     try {
-      const voicePref = localStorage.getItem('ltdd-voice') || 'vivienne';
+      const voicePref = localStorage.getItem('ltdd-voice') || 'amina';
       const resp = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

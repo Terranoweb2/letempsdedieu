@@ -260,14 +260,19 @@ chatAiRouter.post('/auth/logout', async (req: Request, res: Response) => {
   res.json({ message: 'Deconnecte.' });
 });
 
-// Available voices for TTS
-const TTS_VOICES: Record<string, string> = {
-  'vivienne': 'fr-FR-VivienneMultilingualNeural', // Feminine, natural, warm (default)
-  'denise':   'fr-FR-DeniseNeural',               // Feminine, clear
-  'henri':    'fr-FR-HenriNeural',                // Masculine
-  'eloise':   'fr-FR-EloiseNeural',               // Feminine, soft
+// Google Cloud TTS API (premium quality)
+const GOOGLE_TTS_API_KEY = process.env.GOOGLE_TTS_API_KEY || 'AIzaSyATqWvBx07qh8XHXIcZH57RdgiZNmYk93U';
+const GOOGLE_TTS_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize?key=' + GOOGLE_TTS_API_KEY;
+
+// Available voices - Google Cloud Neural2/WaveNet (best quality)
+const TTS_VOICES: Record<string, { name: string; gender: string; engine: 'google' | 'edge' }> = {
+  'amina':    { name: 'fr-FR-Neural2-A', gender: 'FEMALE', engine: 'google' },   // Chaleureuse (default)
+  'yasmine':  { name: 'fr-FR-Neural2-C', gender: 'FEMALE', engine: 'google' },   // Douce
+  'ibrahim':  { name: 'fr-FR-Neural2-B', gender: 'MALE', engine: 'google' },     // Masculine
+  'wavenet':  { name: 'fr-FR-Wavenet-C', gender: 'FEMALE', engine: 'google' },   // WaveNet premium
+  'vivienne': { name: 'fr-FR-VivienneMultilingualNeural', gender: 'FEMALE', engine: 'edge' }, // Edge fallback
 };
-const DEFAULT_VOICE = 'vivienne';
+const DEFAULT_VOICE = 'amina';
 
 // Convert text for natural TTS reading (religious references, numbers, abbreviations)
 function humanizeTextForTTS(text: string): string {
@@ -318,49 +323,88 @@ function humanizeTextForTTS(text: string): string {
   return t.slice(0, 5000);
 }
 
-// TTS endpoint - Microsoft Edge Neural voices (high quality)
+// Google Cloud TTS - premium quality Neural2/WaveNet voices
+async function googleTTS(text: string, voiceName: string, gender: string): Promise<Buffer> {
+  const body = {
+    input: { text },
+    voice: {
+      languageCode: 'fr-FR',
+      name: voiceName,
+      ssmlGender: gender,
+    },
+    audioConfig: {
+      audioEncoding: 'MP3',
+      speakingRate: 1.05,  // Slightly faster for natural feel
+      pitch: 1.0,
+      volumeGainDb: 2.0,  // Slightly louder
+      effectsProfileId: ['headphone-class-device'], // Optimized for headphones/speakers
+    },
+  };
+
+  const resp = await fetch(GOOGLE_TTS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error('Google TTS error: ' + resp.status + ' ' + err);
+  }
+
+  const data = await resp.json() as any;
+  return Buffer.from(data.audioContent, 'base64');
+}
+
+// Edge TTS fallback
+async function edgeTTS(text: string, voice: string): Promise<Buffer> {
+  const id = randomUUID();
+  const outPath = `/tmp/tts-${id}.mp3`;
+
+  await new Promise<void>((resolve, reject) => {
+    execFile('edge-tts', ['--voice', voice, '--rate', '+5%', '--pitch', '+2Hz', '--text', text, '--write-media', outPath],
+      { timeout: 60000 }, (err) => { if (err) reject(err); else resolve(); });
+  });
+
+  const buf = await readFile(outPath);
+  unlink(outPath).catch(() => {});
+  return buf;
+}
+
+// TTS endpoint - Google Cloud Neural2 (primary) + Edge TTS (fallback)
 chatAiRouter.post('/tts', async (req: Request, res: Response) => {
   try {
-    const { text, voice: voiceKey, rate, pitch } = req.body;
+    const { text, voice: voiceKey } = req.body;
     if (!text) {
       res.status(400).json({ error: 'No text provided' });
       return;
     }
 
-    const id = randomUUID();
-    const outPath = `/tmp/tts-${id}.mp3`;
-    const voice = TTS_VOICES[voiceKey || DEFAULT_VOICE] || TTS_VOICES[DEFAULT_VOICE];
-    const ttsRate = rate || '+5%';    // Slightly faster for natural feel
-    const ttsPitch = pitch || '+2Hz'; // Slightly warmer
-
     const cleanText = humanizeTextForTTS(text);
-
     if (!cleanText) {
       res.status(400).json({ error: 'Empty text after cleaning' });
       return;
     }
 
-    const args = [
-      '--voice', voice,
-      '--rate', ttsRate,
-      '--pitch', ttsPitch,
-      '--text', cleanText,
-      '--write-media', outPath,
-    ];
+    const voiceConfig = TTS_VOICES[voiceKey || DEFAULT_VOICE] || TTS_VOICES[DEFAULT_VOICE];
+    let audioBuffer: Buffer;
 
-    await new Promise<void>((resolve, reject) => {
-      execFile('edge-tts', args, { timeout: 60000 }, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    if (voiceConfig.engine === 'google' && GOOGLE_TTS_API_KEY) {
+      try {
+        audioBuffer = await googleTTS(cleanText, voiceConfig.name, voiceConfig.gender);
+        console.log('[TTS] Google Neural2:', voiceConfig.name, cleanText.length + ' chars');
+      } catch (err: any) {
+        console.error('[TTS] Google failed, falling back to Edge:', err.message);
+        audioBuffer = await edgeTTS(cleanText, 'fr-FR-VivienneMultilingualNeural');
+      }
+    } else {
+      audioBuffer = await edgeTTS(cleanText, voiceConfig.name);
+    }
 
-    const audioBuffer = await readFile(outPath);
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', audioBuffer.length.toString());
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(audioBuffer);
-    unlink(outPath).catch(() => {});
   } catch (err) {
     console.error('TTS error:', err);
     res.status(500).json({ error: 'TTS generation failed' });
@@ -369,14 +413,19 @@ chatAiRouter.post('/tts', async (req: Request, res: Response) => {
 
 // List available voices
 chatAiRouter.get('/tts/voices', (_req: Request, res: Response) => {
+  const labels: Record<string, string> = {
+    'amina': 'Amina (Chaleureuse)',
+    'yasmine': 'Yasmine (Douce)',
+    'ibrahim': 'Ibrahim (Masculine)',
+    'wavenet': 'WaveNet Premium',
+    'vivienne': 'Vivienne (Classique)',
+  };
   res.json({
-    voices: Object.entries(TTS_VOICES).map(([key, fullName]) => ({
+    voices: Object.entries(TTS_VOICES).map(([key, config]) => ({
       id: key,
-      name: fullName,
-      label: key === 'denise' ? 'Denise (Chaleureuse)' :
-             key === 'vivienne' ? 'Vivienne (Premium)' :
-             key === 'henri' ? 'Henri (Masculine)' :
-             key === 'eloise' ? 'Eloise (Douce)' : key,
+      name: config.name,
+      engine: config.engine,
+      label: labels[key] || key,
     })),
     default: DEFAULT_VOICE,
   });
