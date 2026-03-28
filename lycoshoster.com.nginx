@@ -1,0 +1,192 @@
+# Rate limiting zones
+limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=auth:10m rate=5r/m;
+limit_req_zone $binary_remote_addr zone=chat:10m rate=2r/s;
+
+server {
+    listen 80;
+    server_name voietv.org www.voietv.org lycoshoster.com www.lycoshoster.com;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(self), geolocation=()" always;
+
+    limit_req zone=general burst=20 nodelay;
+
+    # ===== STATIC PAGES =====
+
+    location = / {
+        root /home/lycosh/lycoshoster/static;
+        try_files /index.html =404;
+    }
+
+    location = /cgu {
+        root /home/lycosh/lycoshoster/static;
+        try_files /cgu.html =404;
+    }
+
+    location = /privacy {
+        root /home/lycosh/lycoshoster/static;
+        try_files /privacy.html =404;
+    }
+
+    location /static/ {
+        alias /home/lycosh/lycoshoster/static/;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # ===== LYCOSHOSTER BACKEND API (at /backend/) =====
+
+    location /backend/auth/ {
+        limit_req zone=auth burst=3 nodelay;
+        proxy_pass http://127.0.0.1:3000/auth/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /backend/chat/ {
+        limit_req zone=chat burst=5 nodelay;
+        proxy_pass http://127.0.0.1:3000/chat/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        chunked_transfer_encoding on;
+    }
+
+    location /backend/webhooks/ {
+        proxy_pass http://127.0.0.1:3000/webhooks/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /backend/ {
+        proxy_pass http://127.0.0.1:3000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ===== BOLT.DIY APP (at /app/) =====
+    # basename: '/app' means Remix routes are under /app/
+    # But assets and API calls use absolute paths: /assets/, /api/, /favicon.svg
+
+    location = /app {
+        return 301 /app/;
+    }
+
+    location /app/ {
+        proxy_pass http://127.0.0.1:4173;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # LycosHoster logo
+    location = /lycoshoster-logo.png {
+        proxy_pass http://127.0.0.1:4173;
+        expires 30d;
+    }
+
+    # bolt.diy assets (CSS, JS - absolute paths without /app/ prefix)
+    location /assets/ {
+        proxy_pass http://127.0.0.1:4173;
+        proxy_set_header Host $host;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # bolt.diy favicon
+    location = /favicon.svg {
+        proxy_pass http://127.0.0.1:4173;
+        proxy_set_header Host $host;
+    }
+
+    location = /favicon.ico {
+        proxy_pass http://127.0.0.1:4173;
+        proxy_set_header Host $host;
+    }
+
+    # bolt.diy API calls - rewrite /api/ to /app/api/ since basename is '/app'
+    location /api/transcribe {
+        proxy_pass http://127.0.0.1:3000/api/transcribe;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 25M;
+        proxy_read_timeout 60s;
+    }
+
+    location /api/chat {
+        proxy_pass http://127.0.0.1:3000/api/chat;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 300s;
+    }
+
+    location /api/ {
+        rewrite ^/api/(.*)$ /app/api/$1 break;
+        proxy_pass http://127.0.0.1:4173;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # bolt.diy inspector script
+    location = /inspector-script.js {
+        proxy_pass http://127.0.0.1:4173;
+        proxy_set_header Host $host;
+    }
+
+    # Catch-all: redirect unmatched routes to bolt.diy SPA (for client-side routing)
+    # Handles /chat/2, /settings, etc. that Remix navigates to client-side
+    location = /ltdd-logo.png {
+        alias /var/www/letempsdedieu/ltdd-logo.png;
+        expires 30d;
+        add_header Content-Type image/png;
+    }
+
+    location = /logo.png {
+        alias /var/www/letempsdedieu/logo.png;
+        expires 30d;
+        add_header Content-Type image/png;
+    }
+
+    location / {
+        rewrite ^/(.*)$ /app/$1 break;
+        proxy_pass http://127.0.0.1:4173;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

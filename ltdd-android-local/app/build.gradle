@@ -1,0 +1,43 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'org.voietv.ltdd'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "org.voietv.ltdd"
+        minSdk 24
+        targetSdk 34
+        versionCode 5
+        versionName "5.0"
+    }
+
+    signingConfigs {
+        vps {
+            storeFile file('../vps-debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.vps
+        }
+        debug {
+            minifyEnabled false
+            signingConfig signingConfigs.vps
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}

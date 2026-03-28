@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+*.apk
+*.log
+__pycache__/
+*.pyc
+.gradle/
+build/
+android/app/build/
+letempsdedieu-mobile/android/
+letempsdedieu-mobile/node_modules/
+letempsdedieu-mobile/dist/
+letempsdedieu-mobile/.expo/
+ltdd-android-local/build/
+ltdd-android-local/.gradle/
+ltdd-android-local/vps-debug.keystore
