@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-export type VoiceState = 'idle' | 'listening' | 'processing' | 'thinking' | 'speaking';
+export type VoiceState = 'idle' | 'listening' | 'processing' | 'speaking';
 
 // Safe access - speechSynthesis not available in Android WebView
 const synth = typeof window !== 'undefined' && window.speechSynthesis ? window.speechSynthesis : null;
@@ -11,6 +11,25 @@ const GOODBYE_WORDS = [
   'a bientot', 'ciao', 'bye', 'salut', "j'ai fini", 'c\'est tout',
   'c\'est bon', 'ca suffit', 'stop', 'arrete', 'ferme',
 ];
+
+// DOM-based audio element - more reliable in WebView than new Audio()
+let domAudio: HTMLAudioElement | null = null;
+function getOrCreateAudio(): HTMLAudioElement {
+  if (!domAudio || !document.body.contains(domAudio)) {
+    domAudio = document.createElement('audio');
+    domAudio.id = 'ltdd-tts-player';
+    domAudio.setAttribute('playsinline', '');
+    domAudio.setAttribute('webkit-playsinline', '');
+    domAudio.preload = 'auto';
+    domAudio.volume = 1.0;
+    domAudio.style.display = 'none';
+    document.body.appendChild(domAudio);
+    // Unlock with silent play on user gesture
+    domAudio.src = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAAqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dX/////////////////////////////AAAAAAAAAAAAAAAA/+M4wAAHAAHkAAAAAP/jOMATPAAB5AAAAAAAAAAAAAAAAAAAAAAAAAAA/+M4wH4AAHkAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    domAudio.play().catch(() => {});
+  }
+  return domAudio;
+}
 
 export function useVoiceChat() {
   const [isVoiceMode, setIsVoiceMode] = useState(false);
@@ -30,7 +49,6 @@ export function useVoiceChat() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const silenceStartRef = useRef<number>(0);
   const rafRef = useRef<number>(0);
-  const thinkingAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const interruptCallbackRef = useRef<(() => void) | null>(null); // abort streaming chat
@@ -65,39 +83,6 @@ export function useVoiceChat() {
     return GOODBYE_WORDS.some(w => normalized === w || normalized.startsWith(w + ' ') || normalized.endsWith(' ' + w));
   }, []);
 
-  // Play thinking sound (gentle chime loop)
-  const startThinkingSound = useCallback(() => {
-    try {
-      // Create a subtle "thinking" tone using Web Audio API
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(440, ctx.currentTime);
-      gain.gain.setValueAtTime(0, ctx.currentTime);
-
-      // Gentle pulse pattern
-      const pulse = (time: number) => {
-        gain.gain.setValueAtTime(0, time);
-        gain.gain.linearRampToValueAtTime(0.06, time + 0.15);
-        gain.gain.linearRampToValueAtTime(0, time + 0.6);
-      };
-      for (let i = 0; i < 20; i++) {
-        pulse(ctx.currentTime + i * 1.2);
-      }
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-
-      thinkingAudioRef.current = { pause: () => { osc.stop(); ctx.close(); } } as any;
-    } catch {}
-  }, []);
-
-  const stopThinkingSound = useCallback(() => {
-    try { thinkingAudioRef.current?.pause(); } catch {}
-    thinkingAudioRef.current = null;
-  }, []);
 
   // Monitor audio volume for silence detection
   const startSilenceDetection = useCallback((stream: MediaStream) => {
@@ -168,7 +153,6 @@ export function useVoiceChat() {
   // Start recording with auto silence detection
   const startListening = useCallback(async () => {
     try { synth?.cancel(); } catch {}
-    stopThinkingSound();
     chunksRef.current = [];
 
     try {
@@ -223,9 +207,7 @@ export function useVoiceChat() {
               return;
             }
 
-            // Start thinking sound
-            setVoiceState('thinking');
-            startThinkingSound();
+            setVoiceState('processing');
 
             if (onResultRef.current) {
               onResultRef.current(data.text);
@@ -257,7 +239,7 @@ export function useVoiceChat() {
       console.error('Microphone error:', err);
       setVoiceState('idle');
     }
-  }, [isGoodbye, startThinkingSound, stopThinkingSound, startSilenceDetection, stopSilenceDetection]);
+  }, [isGoodbye, startSilenceDetection, stopSilenceDetection]);
 
   // Public stop (also used by vortex tap)
   const stopListening = useCallback(() => {
@@ -266,6 +248,19 @@ export function useVoiceChat() {
       mediaRecorderRef.current.stop();
     }
   }, [stopSilenceDetection]);
+
+  // Play audio blob using the shared (autoplay-unlocked) audio element
+  const playAudioBlob = useCallback((blob: Blob): Promise<void> => {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob);
+      const audio = getOrCreateAudio();
+      currentAudioRef.current = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; resolve(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; resolve(); };
+      audio.src = url;
+      audio.play().catch((e) => { console.error('[VOICE] play error:', e); URL.revokeObjectURL(url); resolve(); });
+    });
+  }, []);
 
   // Direct server TTS (for goodbye message)
   const speakWithServerDirect = useCallback(async (text: string): Promise<void> => {
@@ -279,15 +274,9 @@ export function useVoiceChat() {
       });
       if (!resp.ok) return;
       const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      await new Promise<void>((resolve) => {
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.play().catch(() => resolve());
-      });
+      await playAudioBlob(blob);
     } catch {}
-  }, []);
+  }, [playAudioBlob]);
 
   // Interrupt: stop current audio + abort chat streaming, then start listening
   const interruptAndListen = useCallback(() => {
@@ -299,11 +288,10 @@ export function useVoiceChat() {
       interruptCallbackRef.current();
       interruptCallbackRef.current = null;
     }
-    stopThinkingSound();
     setVoiceState('listening');
     // Start recording immediately
     startListening();
-  }, [startListening, stopThinkingSound]);
+  }, [startListening]);
 
   // Monitor mic during AI speech for user interruption
   const startInterruptionDetection = useCallback(async () => {
@@ -351,7 +339,6 @@ export function useVoiceChat() {
   // Server TTS with auto re-listen + interrupt detection
   const speakWithServer = useCallback((text: string): Promise<void> => {
     return new Promise(async (resolve) => {
-      stopThinkingSound();
 
       const done = () => {
         setVoiceState('idle');
@@ -364,6 +351,7 @@ export function useVoiceChat() {
 
       try {
         const voicePref = localStorage.getItem('ltdd-voice') || 'amina';
+        console.log('[VOICE] Fetching TTS for', text.length, 'chars');
         const resp = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -371,23 +359,32 @@ export function useVoiceChat() {
           body: JSON.stringify({ text, voice: voicePref }),
         });
 
-        if (!resp.ok) throw new Error('TTS failed');
+        if (!resp.ok) throw new Error('TTS failed: ' + resp.status);
 
         const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        currentAudioRef.current = audio;
-        audio.onended = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; done(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; done(); };
-        await audio.play();
+        console.log('[VOICE] Got audio blob:', blob.size, 'bytes');
 
-        // Start monitoring mic for user interruption while AI speaks
-        startInterruptionDetection();
-      } catch {
+        // Use shared audio element (unlocked from user gesture)
+        const url = URL.createObjectURL(blob);
+        const audio = getOrCreateAudio();
+        currentAudioRef.current = audio;
+
+        await new Promise<void>((playResolve) => {
+          audio.onended = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; playResolve(); };
+          audio.onerror = () => { URL.revokeObjectURL(url); currentAudioRef.current = null; playResolve(); };
+          audio.src = url;
+          audio.play()
+            .then(() => console.log('[VOICE] Audio playing!'))
+            .catch((e) => { console.error('[VOICE] Play blocked:', e.message); playResolve(); });
+        });
+
+        done();
+      } catch (err: any) {
+        console.error('[VOICE] TTS error:', err.message);
         done();
       }
     });
-  }, [startListening, stopThinkingSound, startInterruptionDetection]);
+  }, [startListening, startInterruptionDetection]);
 
   // Queue-based TTS: play sentences one by one
   const ttsQueueRef = useRef<string[]>([]);
@@ -452,7 +449,6 @@ export function useVoiceChat() {
 
   // Speak full text (legacy - used when streaming is done)
   const speakText = useCallback((text: string): Promise<void> => {
-    stopThinkingSound();
     if (!text.trim()) { setVoiceState('idle'); return Promise.resolve(); }
     setLastAiText(text.slice(0, 200));
     setVoiceState('speaking');
@@ -487,22 +483,22 @@ export function useVoiceChat() {
         }
       }, 200);
     });
-  }, [playNextInQueue, stopThinkingSound, startInterruptionDetection]);
+  }, [playNextInQueue, startInterruptionDetection]);
 
   const stopSpeaking = useCallback(() => {
-    stopThinkingSound();
-    try { currentAudioRef.current?.pause(); } catch {}
-    currentAudioRef.current = null;
+    try {
+      if (domAudio) { domAudio.pause(); domAudio.currentTime = 0; }
+      currentAudioRef.current = null;
+    } catch {}
     try { synth?.cancel(); } catch {}
     setVoiceState('idle');
     synthRef.current = null;
-  }, [stopThinkingSound]);
+  }, []);
 
   // Internal exit (for goodbye detection)
   const exitVoiceModeInternal = useCallback(() => {
     autoListenAfterSpeakRef.current = false;
     onResultRef.current = null;
-    stopThinkingSound();
     stopSilenceDetection();
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
@@ -516,10 +512,12 @@ export function useVoiceChat() {
     synthRef.current = null;
     setIsVoiceMode(false);
     setVoiceState('idle');
-  }, [stopThinkingSound, stopSilenceDetection]);
+  }, [stopSilenceDetection]);
 
-  // Enter voice mode
+  // Enter voice mode - MUST be called from user gesture (click/tap) to unlock audio
   const enterVoiceMode = useCallback((onResult: (text: string) => void) => {
+    // Initialize shared audio on user gesture to bypass autoplay policy
+    getOrCreateAudio();
     onResultRef.current = onResult;
     autoListenAfterSpeakRef.current = true;
     setIsVoiceMode(true);

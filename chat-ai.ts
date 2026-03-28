@@ -314,10 +314,23 @@ function humanizeTextForTTS(text: string): string {
   // Parenthetical references: "(5:20)" → read naturally
   // Already handled by the : replacement above
 
+  // Remove ellipsis and trailing dots that cause long pauses
+  t = t.replace(/\.{2,}/g, '.');       // "..." or ".." → "."
+  t = t.replace(/…/g, ',');            // Unicode ellipsis → comma (short pause)
+  t = t.replace(/\s*[—–]\s*/g, ', '); // Em/en dashes → comma
+  t = t.replace(/\(\s*\)/g, '');       // Empty parentheses
+  t = t.replace(/\[\s*\]/g, '');       // Empty brackets
+  t = t.replace(/\s*;\s*/g, ', ');     // Semicolons → comma (shorter pause)
+  t = t.replace(/:\s*$/gm, '.');      // Trailing colons → period
+  t = t.replace(/\.\s*,/g, '.');      // ". ," → "."
+  t = t.replace(/,\s*\./g, '.');      // ", ." → "."
+  t = t.replace(/,\s*,/g, ',');       // ",," → ","
+
   // Clean up whitespace
   t = t.replace(/\n{2,}/g, '. ');
   t = t.replace(/\n/g, ' ');
-  t = t.replace(/\s{2,}/g, ' ');
+  t = t.replace(/\s{2,}/g, ' ');      // Double spaces → single
+  t = t.replace(/\.\s*\.\s*/g, '. '); // Double periods → single
   t = t.trim();
 
   return t.slice(0, 5000);
@@ -334,7 +347,7 @@ async function googleTTS(text: string, voiceName: string, gender: string): Promi
     },
     audioConfig: {
       audioEncoding: 'MP3',
-      speakingRate: 1.05,  // Slightly faster for natural feel
+      speakingRate: 1.15,  // Faster to reduce pauses
       pitch: 1.0,
       volumeGainDb: 2.0,  // Slightly louder
       effectsProfileId: ['headphone-class-device'], // Optimized for headphones/speakers
