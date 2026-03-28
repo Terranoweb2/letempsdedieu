@@ -261,7 +261,7 @@ chatAiRouter.post('/auth/logout', async (req: Request, res: Response) => {
 });
 
 // Google Cloud TTS API (premium quality)
-const GOOGLE_TTS_API_KEY = process.env.GOOGLE_TTS_API_KEY || 'AIzaSyATqWvBx07qh8XHXIcZH57RdgiZNmYk93U';
+const GOOGLE_TTS_API_KEY = process.env.GOOGLE_TTS_API_KEY || 'AIzaSyBNtj6vDBN1XkYHF0WjJuG-WceJYcCP32I';
 const GOOGLE_TTS_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize?key=' + GOOGLE_TTS_API_KEY;
 
 // Available voices - Google Cloud Neural2/WaveNet (best quality)
