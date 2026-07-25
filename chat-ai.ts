@@ -314,23 +314,35 @@ function humanizeTextForTTS(text: string): string {
   // Parenthetical references: "(5:20)" → read naturally
   // Already handled by the : replacement above
 
-  // Remove ellipsis and trailing dots that cause long pauses
-  t = t.replace(/\.{2,}/g, '.');       // "..." or ".." → "."
-  t = t.replace(/…/g, ',');            // Unicode ellipsis → comma (short pause)
-  t = t.replace(/\s*[—–]\s*/g, ', '); // Em/en dashes → comma
-  t = t.replace(/\(\s*\)/g, '');       // Empty parentheses
-  t = t.replace(/\[\s*\]/g, '');       // Empty brackets
-  t = t.replace(/\s*;\s*/g, ', ');     // Semicolons → comma (shorter pause)
-  t = t.replace(/:\s*$/gm, '.');      // Trailing colons → period
-  t = t.replace(/\.\s*,/g, '.');      // ". ," → "."
-  t = t.replace(/,\s*\./g, '.');      // ", ." → "."
-  t = t.replace(/,\s*,/g, ',');       // ",," → ","
+  // Add a tiny breathing space at the start so first words aren't cut off
+  if (t.length > 0) {
+    t = '  ' + t;  // Leading spaces create a natural breath before speech
+  }
 
-  // Clean up whitespace
+  // Clean problematic characters (keep natural reading flow)
+  t = t.replace(/\.{3,}/g, '.');           // "..." → single period
+  t = t.replace(/…/g, '.');               // Unicode ellipsis → period
+  t = t.replace(/\s*[—–]\s*/g, ', ');     // Em/en dashes → comma
+  t = t.replace(/\(\s*\)/g, '');           // Empty parens
+  t = t.replace(/\[\s*\]/g, '');           // Empty brackets
+  t = t.replace(/«\s*/g, '');              // French quotes
+  t = t.replace(/\s*»/g, '');
+  t = t.replace(/"/g, '');
+  t = t.replace(/\u201C/g, '');           // Smart quotes
+  t = t.replace(/\u201D/g, '');
+  t = t.replace(/\u2018/g, "'");          // Smart apostrophes
+  t = t.replace(/\u2019/g, "'");
+  t = t.replace(/\n\s*\d+\.\s*/g, '. ');  // Numbered lists → sentences
+  t = t.replace(/\n\s*[-\u2022]\s*/g, '. '); // Bullet lists → sentences
+
+  // Clean up whitespace and duplicate punctuation
   t = t.replace(/\n{2,}/g, '. ');
   t = t.replace(/\n/g, ' ');
-  t = t.replace(/\s{2,}/g, ' ');      // Double spaces → single
-  t = t.replace(/\.\s*\.\s*/g, '. '); // Double periods → single
+  t = t.replace(/\.\s*,/g, '.');
+  t = t.replace(/,\s*\./g, '.');
+  t = t.replace(/,\s*,/g, ',');
+  t = t.replace(/\.\s*\.\s*/g, '. ');
+  t = t.replace(/\s{2,}/g, ' ');
   t = t.trim();
 
   return t.slice(0, 5000);
@@ -347,7 +359,7 @@ async function googleTTS(text: string, voiceName: string, gender: string): Promi
     },
     audioConfig: {
       audioEncoding: 'MP3',
-      speakingRate: 1.15,  // Faster to reduce pauses
+      speakingRate: 1.0,  // Normal human speed
       pitch: 1.0,
       volumeGainDb: 2.0,  // Slightly louder
       effectsProfileId: ['headphone-class-device'], // Optimized for headphones/speakers
@@ -375,7 +387,7 @@ async function edgeTTS(text: string, voice: string): Promise<Buffer> {
   const outPath = `/tmp/tts-${id}.mp3`;
 
   await new Promise<void>((resolve, reject) => {
-    execFile('edge-tts', ['--voice', voice, '--rate', '+5%', '--pitch', '+2Hz', '--text', text, '--write-media', outPath],
+    execFile('edge-tts', ['--voice', voice, '--rate', '+0%', '--pitch', '+0Hz', '--text', text, '--write-media', outPath],
       { timeout: 60000 }, (err) => { if (err) reject(err); else resolve(); });
   });
 
@@ -462,6 +474,7 @@ chatAiRouter.post('/transcribe', upload.single('audio'), async (req: Request, re
         formData.append('model', 'whisper-large-v3-turbo');
         formData.append('language', 'fr');
         formData.append('response_format', 'json');
+        formData.append('prompt', 'Discussion sur islam, Coran, hadiths, Aicha, prophete Muhammad, sourate, verset, Bukhari, Muslim, islamologie, religion, Bible, Jesus, christianisme');
 
         const groqResp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
           method: 'POST',
