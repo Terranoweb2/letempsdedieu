@@ -439,51 +439,20 @@ export function useVoiceChat() {
     }
   }, [startListening, startInterruptionDetection]);
 
-  // Add a sentence to TTS queue and start playing if not already
-  const queueTTSSentence = useCallback((sentence: string) => {
-    ttsQueueRef.current.push(sentence);
-    if (!ttsPlayingRef.current) {
-      playNextInQueue();
-    }
-  }, [playNextInQueue]);
-
-  // Speak full text (legacy - used when streaming is done)
+  // Speak full text - send ALL text in ONE request (no pauses between sentences)
   const speakText = useCallback((text: string): Promise<void> => {
     if (!text.trim()) { setVoiceState('idle'); return Promise.resolve(); }
     setLastAiText(text.slice(0, 200));
     setVoiceState('speaking');
-    ttsAbortedRef.current = false;
+    return speakWithServer(text);
+  }, [speakWithServer]);
 
-    // Split into sentences and queue them
-    const sentences = text
-      .replace(/([.!?])\s+/g, '$1|||')
-      .split('|||')
-      .map(s => s.trim())
-      .filter(s => s.length > 2);
-
-    if (sentences.length === 0) {
-      setVoiceState('idle');
-      return Promise.resolve();
-    }
-
-    // Queue all sentences
-    ttsQueueRef.current = [];
-    sentences.forEach(s => ttsQueueRef.current.push(s));
-
-    // Start playing + monitor for interruption
-    playNextInQueue();
-    startInterruptionDetection();
-
-    // Return a promise that resolves when queue is empty
-    return new Promise<void>((resolve) => {
-      const check = setInterval(() => {
-        if (!ttsPlayingRef.current || ttsAbortedRef.current) {
-          clearInterval(check);
-          resolve();
-        }
-      }, 200);
-    });
-  }, [playNextInQueue, startInterruptionDetection]);
+  // Compat stubs
+  const queueTTSSentence = useCallback((_s: string) => {}, []);
+  const abortTTSQueue = useCallback(() => {
+    try { currentAudioRef.current?.pause(); } catch {}
+    currentAudioRef.current = null;
+  }, []);
 
   const stopSpeaking = useCallback(() => {
     try {
@@ -537,14 +506,7 @@ export function useVoiceChat() {
     interruptCallbackRef.current = cb;
   }, []);
 
-  // Stop TTS queue on interruption
-  const abortTTSQueue = useCallback(() => {
-    ttsAbortedRef.current = true;
-    ttsQueueRef.current = [];
-    try { currentAudioRef.current?.pause(); } catch {}
-    currentAudioRef.current = null;
-    ttsPlayingRef.current = false;
-  }, []);
+  // (abortTTSQueue already defined above)
 
   return {
     isVoiceMode, voiceState, isSupported, lastUserText, lastAiText,
